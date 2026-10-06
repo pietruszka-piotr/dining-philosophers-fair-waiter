@@ -19,7 +19,7 @@ namespace wspolbiezne2
             var stats = new Stats[n];
             var threads = new Thread[n];
             using var cts = new CancellationTokenSource(simulation);
-            var start = new CountdownEvent(n);
+            using var start = new CountdownEvent(n);
 
             for (int i = 0; i < n; i++)
             {
@@ -60,14 +60,13 @@ namespace wspolbiezne2
                 if (token.IsCancellationRequested) break;
 
                 // prosba do kelnera
-                waiter.RequestToEat(id, token);
-                if (token.IsCancellationRequested) break;
+                using var reservation = waiter.RequestToEat(id, token);
+                if (reservation is null || token.IsCancellationRequested) break;
 
                 // eat
                 Thread.Sleep(rng.Next(8, 21));
                 s.Eat++;
 
-                waiter.DoneEating(id);
             }
         }
     }
@@ -90,7 +89,7 @@ namespace wspolbiezne2
         private int Left(int i) => i;
         private int Right(int i) => (i + 1) % _forkFree.Length;
 
-        public void RequestToEat(int i, CancellationToken token)
+        public IDisposable? RequestToEat(int i, CancellationToken token)
         {
             lock (_lock)
             {
@@ -101,7 +100,7 @@ namespace wspolbiezne2
                     if (token.IsCancellationRequested)
                     {
                         RemoveFromQueue(i);
-                        return;
+                        return null;
                     }
 
                     bool iIsHead = _fifo.Count > 0 && _fifo.Peek() == i;
@@ -111,7 +110,7 @@ namespace wspolbiezne2
                         _forkFree[Left(i)] = false;
                         _forkFree[Right(i)] = false;
                         _fifo.Dequeue();
-                        return;
+                        return new ForkReservation(this, i);
                     }
 
                     Monitor.Wait(_lock, 100);
@@ -119,7 +118,7 @@ namespace wspolbiezne2
             }
         }
 
-        public void DoneEating(int i)
+        private void DoneEating(int i)
         {
             lock (_lock)
             {
@@ -140,6 +139,20 @@ namespace wspolbiezne2
             }
             while (tmp.Count > 0) _fifo.Enqueue(tmp.Dequeue());
             Monitor.PulseAll(_lock);
+        }
+
+        private sealed class ForkReservation : IDisposable
+        {
+            private Waiter? _waiter;
+            private readonly int _id;
+
+            public ForkReservation(Waiter waiter, int id)
+            {
+                _waiter = waiter;
+                _id = id;
+            }
+
+            public void Dispose() => Interlocked.Exchange(ref _waiter, null)?.DoneEating(_id);
         }
     }
 }
